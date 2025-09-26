@@ -85,12 +85,16 @@ func main() {
 	// Connect to Typesense instances
 	usersClient := typesense.NewClient(
 		typesense.WithServer("https://users2.exobook.ca:8108"),
-		typesense.WithAPIKey("your-api-key"),
+		typesense.WithAPIKey(os.Getenv(
+			"TYPESENSE_API_KEY",
+		)),
 	)
 
 	postsClient := typesense.NewClient(
-		typesense.WithServer("https://posts2.exobook.ca"), // Adjust as needed
-		typesense.WithAPIKey("your-api-key"),
+		typesense.WithServer("https://posts2.exobook.ca:8108"), // Adjust as needed
+		typesense.WithAPIKey(os.Getenv(
+			"TYPESENSE_API_KEY",
+		)),
 	)
 
 	// Create subscriber service
