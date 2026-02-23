@@ -19,7 +19,7 @@ type Post struct {
 	UserPicture   string    `json:"user_picture"`
 	UserBio       string    `json:"user_bio"`
 	UserProgramme string    `json:"user_programme"`
-	UserYear      int       `json:"user_year"`
+	UserYear      int32     `json:"user_year"`
 	UserCampus    string    `json:"user_campus"`
 	Subject       string    `json:"subject"`
 	Title         string    `json:"title"`
@@ -41,7 +41,7 @@ type User struct {
 	Campus      string    `json:"campus"`
 	InfoUpdated bool      `json:"info_updated"`
 	Program     string    `json:"program"`
-	Year        int       `json:"year"`
+	Year        int32     `json:"year"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
