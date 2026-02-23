@@ -3,8 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -56,14 +55,17 @@ type SubscriberService struct {
 func writeCredsFileFromEnv() string {
 	creds := os.Getenv("NATS_CREDS")
 	if creds == "" {
-		log.Fatal("NATS_CREDS env var is not set")
+		slog.Error("NATS_CREDS env var is not set")
+		os.Exit(1)
 	}
 	tmpfile, err := os.CreateTemp("", "nats-user-*.creds")
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("failed to create temp creds file", "error", err)
+		os.Exit(1)
 	}
 	if _, err := tmpfile.Write([]byte(creds)); err != nil {
-		log.Fatal(err)
+		slog.Error("failed to write creds file", "error", err)
+		os.Exit(1)
 	}
 	tmpfile.Close()
 	return tmpfile.Name()
@@ -77,10 +79,11 @@ func main() {
 	credsPath := writeCredsFileFromEnv()
 	nc, err := nats.Connect(`connect.ngs.global`, nats.UserCredentials(credsPath))
 	if err != nil {
-		log.Fatalf("failed to connect to NATS: %v", err)
+		slog.Error("failed to connect to NATS", "error", err)
+		os.Exit(1)
 	}
 	defer nc.Drain()
-	log.Println("NATS connection time:", time.Since(start))
+	slog.Info("NATS connected", "elapsed", time.Since(start))
 
 	// Connect to Typesense instances
 	usersClient := typesense.NewClient(
@@ -107,9 +110,8 @@ func main() {
 	// Subscribe to all events
 	service.setupSubscriptions()
 
-	fmt.Println("🚀 Listening for events on NATS...")
-	fmt.Println("📝 Subscribed to: users.created, users.updated, users.deleted")
-	fmt.Println("📄 Subscribed to: posts.upsert, posts.deleted")
+	slog.Info("listening for events on NATS")
+	slog.Info("subscribed to subjects", "subjects", []string{"users.created", "users.updated", "users.deleted", "posts.upsert", "posts.deleted"})
 	
 	select {} // block forever
 }
@@ -127,132 +129,137 @@ func (s *SubscriberService) setupSubscriptions() {
 
 func (s *SubscriberService) subscribeToUserCreated() {
 	_, err := s.natsConn.Subscribe("users.created", func(msg *nats.Msg) {
-		log.Println("📥 New user created")
-		
+		slog.Info("new user created event received")
+
 		var user User
 		if err := json.Unmarshal(msg.Data, &user); err != nil {
-			log.Printf("❌ Failed to unmarshal user: %v", err)
+			slog.Error("failed to unmarshal user", "error", err)
 			return
 		}
 
 		document := s.userToDocument(user)
-		
+
 		_, err := s.usersClient.Collection("users").Documents().Create(context.Background(), document)
 		if err != nil {
-			log.Printf("❌ Failed to create user in Typesense: %v", err)
+			slog.Error("failed to create user in Typesense", "error", err)
 			return
 		}
-		
-		log.Printf("✅ Created user in search index: %s (%s)", user.Id, user.Name)
+
+		slog.Info("created user in search index", "id", user.Id, "name", user.Name)
 	})
-	
+
 	if err != nil {
-		log.Fatalf("Failed to subscribe to users.created: %v", err)
+		slog.Error("failed to subscribe to users.created", "error", err)
+		os.Exit(1)
 	}
 }
 
 func (s *SubscriberService) subscribeToUserUpdated() {
 	_, err := s.natsConn.Subscribe("users.updated", func(msg *nats.Msg) {
-		log.Println("📥 User updated")
-		
+		slog.Info("user updated event received")
+
 		var user User
 		if err := json.Unmarshal(msg.Data, &user); err != nil {
-			log.Printf("❌ Failed to unmarshal user: %v", err)
+			slog.Error("failed to unmarshal user", "error", err)
 			return
 		}
 
 		document := s.userToDocument(user)
-		
+
 		_, err := s.usersClient.Collection("users").Documents().Upsert(context.Background(), document)
 		if err != nil {
-			log.Printf("❌ Failed to update user in Typesense: %v", err)
+			slog.Error("failed to update user in Typesense", "error", err)
 			return
 		}
-		
-		log.Printf("✅ Updated user in search index: %s (%s)", user.Id, user.Name)
+
+		slog.Info("updated user in search index", "id", user.Id, "name", user.Name)
 	})
-	
+
 	if err != nil {
-		log.Fatalf("Failed to subscribe to users.updated: %v", err)
+		slog.Error("failed to subscribe to users.updated", "error", err)
+		os.Exit(1)
 	}
 }
 
 func (s *SubscriberService) subscribeToUserDeleted() {
 	_, err := s.natsConn.Subscribe("users.deleted", func(msg *nats.Msg) {
-		log.Println("📥 User deleted")
-		
+		slog.Info("user deleted event received")
+
 		// For deletes, we might just get the ID
 		var deleteEvent struct {
 			Id string `json:"id"`
 		}
 		if err := json.Unmarshal(msg.Data, &deleteEvent); err != nil {
-			log.Printf("❌ Failed to unmarshal delete event: %v", err)
+			slog.Error("failed to unmarshal delete event", "error", err)
 			return
 		}
 
 		_, err := s.usersClient.Collection("users").Document(deleteEvent.Id).Delete(context.Background())
 		if err != nil {
-			log.Printf("❌ Failed to delete user from Typesense: %v", err)
+			slog.Error("failed to delete user from Typesense", "error", err)
 			return
 		}
-		
-		log.Printf("✅ Deleted user from search index: %s", deleteEvent.Id)
+
+		slog.Info("deleted user from search index", "id", deleteEvent.Id)
 	})
-	
+
 	if err != nil {
-		log.Fatalf("Failed to subscribe to users.deleted: %v", err)
+		slog.Error("failed to subscribe to users.deleted", "error", err)
+		os.Exit(1)
 	}
 }
 
 func (s *SubscriberService) subscribeToPostUpsert() {
 	_, err := s.natsConn.Subscribe("posts.upsert", func(msg *nats.Msg) {
-		log.Println("📥 Post upserted")
-		
+		slog.Info("post upsert event received")
+
 		var post Post
 		if err := json.Unmarshal(msg.Data, &post); err != nil {
-			log.Printf("❌ Failed to unmarshal post: %v", err)
+			slog.Error("failed to unmarshal post", "error", err)
 			return
 		}
 
 		document := s.postToDocument(post)
-		
+
 		_, err := s.postsClient.Collection("posts").Documents().Upsert(context.Background(), document)
 		if err != nil {
-			log.Printf("❌ Failed to upsert post in Typesense: %v", err)
+			slog.Error("failed to upsert post in Typesense", "error", err)
 			return
 		}
-		
-		log.Printf("✅ Upserted post in search index: %s", post.Id)
+
+		slog.Info("upserted post in search index", "id", post.Id)
 	})
-	
+
 	if err != nil {
-		log.Fatalf("Failed to subscribe to posts.upsert: %v", err)
+		slog.Error("failed to subscribe to posts.upsert", "error", err)
+		os.Exit(1)
 	}
 }
 
 func (s *SubscriberService) subscribeToPostDeleted() {
 	_, err := s.natsConn.Subscribe("posts.deleted", func(msg *nats.Msg) {
-		log.Println("📥 Post deleted")
-		
+		slog.Info("post deleted event received")
+
 		var deleteEvent struct {
 			Id string `json:"id"`
 		}
 		if err := json.Unmarshal(msg.Data, &deleteEvent); err != nil {
-			log.Printf("❌ Failed to unmarshal delete event: %v", err)
+			slog.Error("failed to unmarshal delete event", "error", err)
 			return
 		}
 
 		_, err := s.postsClient.Collection("posts").Document(deleteEvent.Id).Delete(context.Background())
 		if err != nil {
-			log.Printf("❌ Failed to delete post from Typesense: %v", err)
+			slog.Error("failed to delete post from Typesense", "error", err)
 			return
 		}
-		
-		log.Printf("✅ Deleted post from search index: %s", deleteEvent.Id)
+
+		slog.Info("deleted post from search index", "id", deleteEvent.Id)
 	})
-	
+
 	if err != nil {
-		log.Fatalf("Failed to subscribe to posts.deleted: %v", err)
+		slog.Error("failed to subscribe to posts.deleted", "error", err)
+		os.Exit(1)
 	}
 }
 
