@@ -1,1 +1,10 @@
 .env
+.env.*
+!.env.example
+*.creds
+*firebase-adminsdk*.json
+*-adminsdk*.json
+*.log
+.DS_Store
+.idea/
+.vscode/

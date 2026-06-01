@@ -75,8 +75,8 @@ The service subscribes to these NATS subjects:
 ### Typesense Connections
 
 The service connects to two Typesense instances:
-- Users collection: `https://users2.exobook.ca:8108`
-- Posts collection: `https://posts2.exobook.ca`
+- Users collection: `https://users2.linkio.ca:8108`
+- Posts collection: `https://posts2.linkio.ca`
 
 ## Key Implementation Details
 

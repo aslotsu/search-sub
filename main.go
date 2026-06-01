@@ -87,14 +87,14 @@ func main() {
 
 	// Connect to Typesense instances
 	usersClient := typesense.NewClient(
-		typesense.WithServer("https://users2.exobook.ca"),
+		typesense.WithServer("https://users2.linkio.ca"),
 		typesense.WithAPIKey(os.Getenv(
 			"TYPESENSE_API_KEY",
 		)),
 	)
 
 	postsClient := typesense.NewClient(
-		typesense.WithServer("https://posts2.exobook.ca"), // Adjust as needed
+		typesense.WithServer("https://posts2.linkio.ca"), // Adjust as needed
 		typesense.WithAPIKey(os.Getenv(
 			"TYPESENSE_API_KEY",
 		)),
