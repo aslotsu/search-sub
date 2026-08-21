@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -47,10 +48,16 @@ type User struct {
 }
 
 type SubscriberService struct {
-	natsConn      *nats.Conn
-	usersClient   *typesense.Client
-	postsClient   *typesense.Client
+	natsConn    *nats.Conn
+	usersClient *typesense.Client
+	postsClient *typesense.Client
 }
+
+const (
+	typesenseMaxAttempts    = 6
+	typesenseBaseRetryDelay = time.Second
+	typesenseMaxRetryDelay  = 30 * time.Second
+)
 
 func writeCredsFileFromEnv() string {
 	creds := os.Getenv("NATS_CREDS")
@@ -112,7 +119,7 @@ func main() {
 
 	slog.Info("listening for events on NATS")
 	slog.Info("subscribed to subjects", "subjects", []string{"users.created", "users.updated", "users.deleted", "posts.upsert", "posts.deleted"})
-	
+
 	select {} // block forever
 }
 
@@ -121,7 +128,7 @@ func (s *SubscriberService) setupSubscriptions() {
 	s.subscribeToUserCreated()
 	s.subscribeToUserUpdated()
 	s.subscribeToUserDeleted()
-	
+
 	// Posts events
 	s.subscribeToPostUpsert()
 	s.subscribeToPostDeleted()
@@ -139,7 +146,10 @@ func (s *SubscriberService) subscribeToUserCreated() {
 
 		document := s.userToDocument(user)
 
-		_, err := s.usersClient.Collection("users").Documents().Create(context.Background(), document)
+		err := withTypesenseRetry("create user", func() error {
+			_, err := s.usersClient.Collection("users").Documents().Create(context.Background(), document)
+			return err
+		})
 		if err != nil {
 			slog.Error("failed to create user in Typesense", "error", err)
 			return
@@ -166,7 +176,10 @@ func (s *SubscriberService) subscribeToUserUpdated() {
 
 		document := s.userToDocument(user)
 
-		_, err := s.usersClient.Collection("users").Documents().Upsert(context.Background(), document)
+		err := withTypesenseRetry("upsert user", func() error {
+			_, err := s.usersClient.Collection("users").Documents().Upsert(context.Background(), document)
+			return err
+		})
 		if err != nil {
 			slog.Error("failed to update user in Typesense", "error", err)
 			return
@@ -194,7 +207,10 @@ func (s *SubscriberService) subscribeToUserDeleted() {
 			return
 		}
 
-		_, err := s.usersClient.Collection("users").Document(deleteEvent.Id).Delete(context.Background())
+		err := withTypesenseRetry("delete user", func() error {
+			_, err := s.usersClient.Collection("users").Document(deleteEvent.Id).Delete(context.Background())
+			return err
+		})
 		if err != nil {
 			slog.Error("failed to delete user from Typesense", "error", err)
 			return
@@ -221,7 +237,10 @@ func (s *SubscriberService) subscribeToPostUpsert() {
 
 		document := s.postToDocument(post)
 
-		_, err := s.postsClient.Collection("posts").Documents().Upsert(context.Background(), document)
+		err := withTypesenseRetry("upsert post", func() error {
+			_, err := s.postsClient.Collection("posts").Documents().Upsert(context.Background(), document)
+			return err
+		})
 		if err != nil {
 			slog.Error("failed to upsert post in Typesense", "error", err)
 			return
@@ -248,7 +267,10 @@ func (s *SubscriberService) subscribeToPostDeleted() {
 			return
 		}
 
-		_, err := s.postsClient.Collection("posts").Document(deleteEvent.Id).Delete(context.Background())
+		err := withTypesenseRetry("delete post", func() error {
+			_, err := s.postsClient.Collection("posts").Document(deleteEvent.Id).Delete(context.Background())
+			return err
+		})
 		if err != nil {
 			slog.Error("failed to delete post from Typesense", "error", err)
 			return
@@ -300,4 +322,55 @@ func (s *SubscriberService) postToDocument(post Post) map[string]interface{} {
 		"created_at":     post.CreatedAt.Unix(),
 		"updated_at":     post.UpdatedAt.Unix(),
 	}
+}
+
+func withTypesenseRetry(operation string, run func() error) error {
+	var err error
+	for attempt := 1; attempt <= typesenseMaxAttempts; attempt++ {
+		err = run()
+		if err == nil {
+			return nil
+		}
+		if attempt == typesenseMaxAttempts || !isRetryableTypesenseError(err) {
+			return err
+		}
+
+		delay := retryDelay(attempt)
+		slog.Warn("retrying Typesense operation", "operation", operation, "attempt", attempt, "delay", delay, "error", err)
+		time.Sleep(delay)
+	}
+	return err
+}
+
+func retryDelay(attempt int) time.Duration {
+	delay := typesenseBaseRetryDelay * time.Duration(1<<(attempt-1))
+	if delay > typesenseMaxRetryDelay {
+		return typesenseMaxRetryDelay
+	}
+	return delay
+}
+
+func isRetryableTypesenseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, retryable := range []string{
+		"status: 429",
+		"status: 502",
+		"status: 503",
+		"status: 504",
+		"connection refused",
+		"connection reset",
+		"eof",
+		"i/o timeout",
+		"server misbehaving",
+		"temporary",
+		"timeout",
+	} {
+		if strings.Contains(msg, retryable) {
+			return true
+		}
+	}
+	return false
 }
